@@ -1,0 +1,16 @@
+.env
+.env.*
+.git
+.gitignore
+Dockerfile
+docker-compose.yml
+README.md
+*.md
+.DS_Store
+
+*_test.go
+
+main
+/bin
+/tmp
+
