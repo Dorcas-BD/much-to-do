@@ -18,6 +18,7 @@ WORKDIR /app
 RUN addgroup -S appgroup && adduser -S appuser -G appgroup
 
 COPY --from=builder /app/main .
+COPY --from=builder /app/.env . 
 
 USER appuser
 
