@@ -1,4 +1,4 @@
-# MuchToDo API - Container
+# MuchToDo API - Container Assessment
 
 A Golang REST API with MongoDB, containerized with Docker and deployed to Kubernetes using Kind.
 
@@ -54,12 +54,6 @@ Expected response:
     {"message":"pong"}
 
 ## Phase 2 - Kubernetes Setup
-
-### Install Kind and kubectl
-
-    curl -Lo ./kind https://kind.sigs.k8s.io/dl/v0.27.0/kind-linux-amd64
-    chmod +x ./kind
-    sudo mv ./kind /usr/local/bin/kind
 
 ### Create Kind cluster
 
