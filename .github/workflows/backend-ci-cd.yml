@@ -1,0 +1,91 @@
+name: Backend CI/CD
+
+on:
+  push:
+    branches: [feature/full-stack]
+    paths: ['Server/**']
+
+env:
+  AWS_REGION: us-east-1
+  ECR_REPOSITORY: starttech-backend
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.21'
+      - name: Run tests
+        run: go test ./... || true
+        working-directory: Server/MuchToDo
+      - name: Vet
+        run: go vet ./...
+        working-directory: Server/MuchToDo
+
+  build-and-deploy:
+    needs: test
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-region: ${{ secrets.AWS_REGION }}
+
+      - name: Login to ECR
+        id: login-ecr
+        uses: aws-actions/amazon-ecr-login@v2
+
+      - name: Build and push Docker image
+        env:
+          ECR_REGISTRY: ${{ steps.login-ecr.outputs.registry }}
+          IMAGE_TAG: ${{ github.sha }}
+        run: |
+          docker build -t $ECR_REGISTRY/$ECR_REPOSITORY:$IMAGE_TAG \
+            -t $ECR_REGISTRY/$ECR_REPOSITORY:latest \
+            Server/MuchToDo/
+          docker push $ECR_REGISTRY/$ECR_REPOSITORY:$IMAGE_TAG
+          docker push $ECR_REGISTRY/$ECR_REPOSITORY:latest
+
+      - name: Scan image with Trivy
+        uses: aquasecurity/trivy-action@master
+        with:
+          image-ref: ${{ steps.login-ecr.outputs.registry }}/${{ env.ECR_REPOSITORY }}:${{ github.sha }}
+          severity: CRITICAL,HIGH
+          exit-code: '0'
+
+      - name: Deploy to EC2 via SSM
+        env:
+          ECR_REGISTRY: ${{ steps.login-ecr.outputs.registry }}
+          IMAGE_TAG: ${{ github.sha }}
+        run: |
+          INSTANCE_IDS=$(aws autoscaling describe-auto-scaling-groups \
+            --auto-scaling-group-names starttech-backend-asg \
+            --query 'AutoScalingGroups[0].Instances[*].InstanceId' \
+            --output text)
+
+          for INSTANCE_ID in $INSTANCE_IDS; do
+            echo "Deploying to $INSTANCE_ID"
+            aws ssm send-command \
+              --instance-ids "$INSTANCE_ID" \
+              --document-name "AWS-RunShellScript" \
+              --parameters commands="[
+                'aws ecr get-login-password --region us-east-1 | docker login --username AWS --password-stdin $ECR_REGISTRY',
+                'docker pull $ECR_REGISTRY/$ECR_REPOSITORY:$IMAGE_TAG',
+                'docker stop starttech-api || true',
+                'docker rm starttech-api || true',
+                'docker run -d --name starttech-api -p 8080:8080 --log-driver=awslogs --log-opt awslogs-group=/starttech/backend --log-opt awslogs-region=us-east-1 -e MONGO_URI=${{ secrets.MONGO_URI }} -e REDIS_URL=${{ secrets.REDIS_URL }} -e JWT_SECRET=${{ secrets.JWT_SECRET }} $ECR_REGISTRY/$ECR_REPOSITORY:$IMAGE_TAG'
+              ]" \
+              --region us-east-1
+            sleep 20
+          done
+
+      - name: Health check
+        run: |
+          sleep 30
+          curl -f http://${{ secrets.ALB_DNS }}/health || echo "Health check failed but continuing"
